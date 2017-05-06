@@ -9,6 +9,11 @@ library(ranger)
 library(magrittr)
 library(splines)
 library(Metrics)
+library(sp)
+library(rgdal)
+library(geoR)
+library(tmap)
+
 setwd("Documents/Russian Housing Kaggle")
 
 full_train_set <- read_csv("train.csv", col_types = list(kitch_sq = col_double(),
@@ -20,6 +25,29 @@ macro_environment <- read_csv("macro.csv")
 
 full_train_set$year <- year(full_train_set$timestamp)
 full_train_set$month <- month(full_train_set$timestamp)
+
+#### Maps ####
+russian_map <- readRDS("mo_SPD.rds")
+to_map <- full_train_set %>%
+  filter(full_sq > 0) %>%
+  mutate(price_sq = price_doc/full_sq) %>%
+  group_by(sub_area) %>%
+  summarise(nb = n(),
+            mean_price_doc = mean(price_doc),
+            mean_price_sq = mean(price_sq))
+russian_map <- sp::merge(russian_map, to_map)
+tmap_mode("view")
+col_aes <- "mean_price_sq"
+col_min <- min(russian_map[[col_aes]])
+col_max <- max(russian_map[[col_aes]])
+col_inc <- (col_max - col_min)/20
+
+tm_shape(russian_map) + 
+  tm_fill(col = col_aes,
+          style = "fixed",
+          breaks = seq(col_min, col_max, by = col_inc),
+          popup.vars = c("mean_price_doc", "mean_price_sq")) + 
+  tm_borders()
 
 ##### imputation #####
 ### break year built into buckets
