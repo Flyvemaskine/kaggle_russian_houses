@@ -13,6 +13,7 @@ library(sp)
 library(rgdal)
 library(geoR)
 library(tmap)
+library(xgboost)
 
 setwd("Documents/Russian Housing Kaggle")
 
@@ -20,15 +21,26 @@ full_train_set <- read_csv("train.csv", col_types = list(kitch_sq = col_double()
                                                          build_year = col_double(),
                                                          max_floor = col_double(),
                                                          num_room = col_double()))
-full_test_set <- read_csv("test.csv")
+full_test_set <- read_csv("test.csv", col_types = list(kitch_sq = col_double(),
+                                                       build_year = col_double(),
+                                                       max_floor = col_double(),
+                                                       num_room = col_double()))
 macro_environment <- read_csv("macro.csv")
+full_test_set$price_doc <- NA
+full_train_set <- rbind(full_train_set, full_test_set)
+
+d <- function(df){
+### I want to keep the train and test_set together, so I only make changes once.
+### Just a short hand for keeping track of the train set.
+    df[1:30471,]
+}
 
 full_train_set$year <- year(full_train_set$timestamp)
 full_train_set$month <- month(full_train_set$timestamp)
 
 #### Maps ####
 russian_map <- readRDS("mo_SPD.rds")
-to_map <- full_train_set %>%
+to_map <- d(full_train_set) %>%
   filter(full_sq > 0) %>%
   mutate(price_sq = price_doc/full_sq) %>%
   group_by(sub_area) %>%
@@ -67,11 +79,11 @@ full_train_set$build_year2[is.na(full_train_set$build_year2)] <- year_build_imp[
 full_train_set$full_sq[full_train_set$full_sq > 1000] <- full_train_set$life_sq[full_train_set$full_sq > 1000]
 
 
-ggplotly(ggplot(full_train_set, aes(x = as.factor(year), y = price_doc)) + geom_boxplot())
+ggplotly(ggplot(d(full_train_set), aes(x = as.factor(year), y = price_doc)) + geom_boxplot())
 
-ggplotly(ggplot(full_train_set, aes(x = build_year2, y = price_doc)) + geom_boxplot())
+ggplotly(ggplot(d(full_train_set), aes(x = build_year2, y = price_doc)) + geom_boxplot())
 
-ggplotly(ggplot(full_train_set, aes(x = state, y = price_doc)) + geom_boxplot())
+ggplotly(ggplot(d(full_train_set), aes(x = state, y = price_doc)) + geom_boxplot())
 ## Owner occupied results in lower sale price than investment
 ## need to impute metro_km and railroad_km
 median_station_distance <- full_train_set %>%
@@ -104,33 +116,14 @@ full_train_set$state[full_train_set$state == 33] <- 3
 
 
 
-ggplot(full_train_set, aes(x = build_year, y = price_doc)) + geom_point(alpha = 0.3)
-ggplotly(ggplot(full_train_set, aes(x = as.factor(month), y = price_doc)) + geom_boxplot() + facet_grid(~year))
+ggplot(d(full_train_set), aes(x = build_year, y = price_doc)) + geom_point(alpha = 0.3)
+ggplotly(ggplot(d(full_train_set), aes(x = as.factor(month), y = price_doc)) + geom_boxplot() + facet_grid(~year))
 ## life adds no benefit, full_sq is very important
 
 #change max_floor, kitch_sq, and max_floor to dbl
 
 #2781, 22786, 2119
-qplot(x = full_train_set$full_sq / full_train_set$life_sq, y = full_train_set$price_doc, geom = "point")
-ggplot(full_train_set, aes(x = working_percentage, y= price_doc)) + geom_point()
 
-
-test_poly <- data_frame(full_sq = full_train_set$full_sq,
-                        life_sq = full_train_set$life_sq,
-                        full_to_life = full_sq/life_sq,
-                        price_doc = full_train_set$price_doc)
-test_poly$full_to_life[is.na(test_poly$full_to_life)] <- 1
-test_poly$full_to_life[is.infinite(test_poly$full_to_life)] <- 1
-test_poly <- filter(test_poly, full_to_life > 10)
-test_poly_lm <- lm(price_doc ~ full_to_life, data = test_poly)
-summary(test_poly_lm)
-test_poly$pred <- predict(test_poly_lm)
-ggplot(test_poly, aes(x = full_to_life)) + geom_point(aes(y = price_doc)) + geom_line(aes(y = pred), color = "red")
-
-full_train_set$full_to_life <- full_train_set$full_sq/full_train_set$life_sq
-full_train_set$full_to_life[is.infinite(full_train_set$full_to_life)] <- 1
-full_train_set$full_to_life[is.na(full_train_set$full_to_life)] <- 1
-## there appears to be a relationship after 10 that's very linear, not sure how to incorporate
 
 #### connect macro environment to housing #####
 macro_environment$year <- year(macro_environment$timestamp)
@@ -138,7 +131,7 @@ macro_environment$month <- month(macro_environment$timestamp)
 macro_monthly_orig <- macro_environment %>%
   group_by(year, month) %>%
   summarise_each(funs(mean(., na.rm = T)))
-avg_monthly_home_price <- full_train_set %>%
+avg_monthly_home_price <- d(full_train_set) %>%
   group_by(year, month) %>%
   summarise(price_doc = mean(price_doc))
 
@@ -185,12 +178,8 @@ avg_monthly_df$month <- month(avg_monthly_df$date)
 
 full_train_set <- left_join(full_train_set, avg_monthly_df, by = c("year" = "year", "month" = "month"))
 
-
-lm_full <- lm(price_doc ~ predicted, data = full_train_set)
-lm_life <- lm(price_doc ~ life_sq, data = full_train_set)
 #product type is significant, but something else is picking that up now.
 lm_both <- lm(price_doc ~ full_sq + 
-                build_year2 +
                 as.factor(culture_objects_top_25_raion) +
                 railroad_station_walk_km + 
                 metro_km_walk + 
@@ -209,7 +198,7 @@ summary(lm_both)
 BIC(lm_both)
 #### ensembles ####
 # removed build_year so I could get it running
-forest_matrix <- model.matrix(~full_sq +
+xg_matrix <- model.matrix(~full_sq +
   as.factor(culture_objects_top_25_raion) +
   railroad_station_walk_km + 
   metro_km_walk + 
@@ -222,9 +211,10 @@ forest_matrix <- model.matrix(~full_sq +
   sadovoe_km + 
   bulvar_ring_km + 
   office_km +
-  predicted,
-data = full_train_set)
-forest_target <- full_train_set$price_doc
+  predicted + 
+  sub_area,
+data = d(full_train_set))
+xg_target <- d(full_train_set)$price_doc
 
 
 #Swap to RMSLE
@@ -237,16 +227,23 @@ custom_summary = function(data, lev = NULL, model = NULL){
 ctrl <- trainControl(method = "cv",
                      number = 5,
                      summaryFunction = custom_summary,
-                     verboseIter = FALSE)
+                     verboseIter = FALSE,
+                     ##running into memory issues on my computer
+                     allowParallel = FALSE)
+xg_grid <- expand.grid(eta = seq(0.01, 0.21, by = 0.05),
+                       max_depth = seq(2, 10, by = 2),
+                       nrounds = seq(2000, 4000, by = 500),
+                       gamma = 0,
+                       colsample_bytree = 1,
+                       min_child_weight = 1,
+                       subsample = 1)
 
-forest_model <- train(y = forest_target, x = forest_matrix,
-                      method = "ranger",
-                      tuneGrid = data.frame(mtry = c(3, 5, 7, 8, 9)),
+xg_model <- train(y = xg_target, x =xg_matrix,
+                      method = "xgbTree",
+                      tuneGrid = xg_grid,
                       trControl = ctrl,
-                      num.trees = 500,
                       metric = "rmsle",
-                      maximize = FALSE,
-                      importance = "impurity")
+                      maximize = FALSE)
 
 
 
