@@ -216,6 +216,27 @@ xg_matrix <- model.matrix(~full_sq +
 data = d(full_train_set))
 xg_target <- d(full_train_set)$price_doc
 
+xg_test_matrix <- model.matrix(~full_sq +
+                            as.factor(culture_objects_top_25_raion) +
+                            railroad_station_walk_km + 
+                            metro_km_walk + 
+                            as.factor(university_top_20_raion) + 
+                            ecology + 
+                            state * full_sq +
+                            work_to_elder + 
+                            radiation_raion +
+                            school_km + 
+                            sadovoe_km + 
+                            bulvar_ring_km + 
+                            office_km +
+                            predicted + 
+                            sub_area,
+                          data = full_train_set[30472:38133,])
+
+
+
+
+
 
 #Swap to RMSLE
 custom_summary = function(data, lev = NULL, model = NULL){
@@ -245,7 +266,10 @@ xg_model <- train(y = xg_target, x =xg_matrix,
                       metric = "rmsle",
                       maximize = FALSE)
 
+xg_pred <- predict(xg_model, xg_test_matrix)
+
+to_export <- data.frame(id = full_test_set$id, price_doc = xg_pred) 
+write_csv(to_export, "submission1_xgboost.csv")
 
 
-#### Fix test data ####
 
