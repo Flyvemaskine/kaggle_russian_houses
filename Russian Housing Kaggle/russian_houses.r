@@ -58,32 +58,60 @@ tm_shape(russian_map) +
   tm_fill(col = col_aes,
           style = "fixed",
           breaks = seq(col_min, col_max, by = col_inc),
-          popup.vars = c("mean_price_doc", "mean_price_sq")) + 
+          popup.vars = c("mean_price_doc", "mean_price_sq", "sub_area")) + 
   tm_borders()
 
 ##### imputation #####
-### break year built into buckets
-full_train_set$build_year <- ifelse(full_train_set$build_year < 1000, NA, ifelse(full_train_set$build_year > 2018, NA, full_train_set$build_year))
-surrounding_area_year_built <- full_train_set [which(names(full_train_set) %in% c("build_count_before_1920", "build_count_1921-1945", "build_count_1946-1970", "build_count_1971-1995", "build_count_after_1995"))]
-year_build_imp <- by_row(surrounding_area_year_built, which.max)[".out"]
-year_build_imp <- unlist(year_build_imp)
-year_build_imp <- names(surrounding_area_year_built)[year_build_imp]
 
-full_train_set$build_year2 <- ifelse(full_train_set$build_year < 1921, "build_count_before_1920",
-                              ifelse(full_train_set$build_year < 1946, "build_count_1921-1945",
-                              ifelse(full_train_set$build_year < 1971, "build_count_1946-1970",
-                              ifelse(full_train_set$build_year < 1996, "build_count_1971-1995",
-                                                                       "build_count_after_1995"))))
-full_train_set$build_year2[is.na(full_train_set$build_year2)] <- year_build_imp[is.na(full_train_set$build_year2)]
+# there's a relation between build year and price_doc
+ggplotly(ggplot(d(full_train_set), aes(x = build_year, y = price_doc/full_sq)) + geom_point())
+full_train_set$price_per_foot <- full_train_set$price_doc/full_train_set$full_sq
+
+build_year_lm <- lm(build_year ~ sub_area + state,
+                    data = full_train_set)
+
+mean_build_year <- full_train_set %>% 
+  group_by(sub_area, state) %>% 
+  summarise(avg_build_year = mean(build_year, na.rm = T))
+full_train_set %<>% left_join(mean_build_year,
+                              by = c("sub_area" = "sub_area",
+                                     "state" = "state"))
+full_train_set %<>% mutate(build_year2 = ifelse(is.na(build_year),
+                                                avg_build_year,
+                                                build_year))
+full_train_set %<>% mutate(build_year2 = ifelse(is.na(build_year2),
+                                                mean(build_year, na.rm = T),
+                                                build_year2))
+
+### find number of rooms in house
+num_rooms_lm <- lm(num_room ~ build_year2 + full_sq, data = full_train_set)
+num_rooms_pred <- ceiling(predict(num_rooms_lm, newdata = full_train_set, na.action = na.pass))
+full_train_set$num_room <- ifelse(is.na(full_train_set$num_room),
+                                  num_rooms_pred,
+                                  full_train_set$num_room)
+### fill in product type for missing values in prediction set
+product_type_lda <- lda(product_type ~ full_sq + sub_area + build_year2 + num_room,
+                        data = full_train_set,
+                        na.action = na.omit)
+product_type_predict <- predict(product_type_lda, newdata = full_train_set)
+table(product_type_predict$class, full_train_set$product_type) #~90% accuracy on training set
+full_train_set$product_type <- ifelse(is.na(full_train_set$product_type), product_type_predict$class, full_train_set$product_type)
+# it put in 1 and 2 instead of the actual factors... 
+full_train_set$product_type <- ifelse(full_train_set$product_type == 1, "Investment",
+                               ifelse(full_train_set$product_type == 2, "OwnerOccupier",
+                                      full_train_set$product_type))
+
+##max_floor
+full_train_set$floor2 <- ifelse(is.na(full_train_set$floor), 1, full_train_set$floor)
+
 ###
 full_train_set$full_sq[full_train_set$full_sq > 1000] <- full_train_set$life_sq[full_train_set$full_sq > 1000]
+full_train_set$material <- ifelse(is.na(full_train_set$material),
+                                  "missing",
+                                  full_train_set$material)
 
+ggplotly(ggplot(d(full_train_set), aes(x = product_type, y = price_doc)) + geom_boxplot())
 
-ggplotly(ggplot(d(full_train_set), aes(x = as.factor(year), y = price_doc)) + geom_boxplot())
-
-ggplotly(ggplot(d(full_train_set), aes(x = build_year2, y = price_doc)) + geom_boxplot())
-
-ggplotly(ggplot(d(full_train_set), aes(x = state, y = price_doc)) + geom_boxplot())
 ## Owner occupied results in lower sale price than investment
 ## need to impute metro_km and railroad_km
 median_station_distance <- full_train_set %>%
@@ -96,18 +124,8 @@ full_train_set$railroad_station_walk_km[is.na(full_train_set$railroad_station_wa
 
 ###
 full_train_set$state <- ifelse(is.na(full_train_set$state), "missing", full_train_set$state)
-##neighboring materials
-full_train_set <- mutate(full_train_set,
-                         build_percent_block = build_count_block/raion_build_count_with_material_info,
-                         build_percent_wood = build_count_wood/raion_build_count_with_material_info,
-                         build_percent_frame = build_count_frame/raion_build_count_with_material_info,
-                         build_percent_brick = build_count_brick/raion_build_count_with_material_info,
-                         build_percent_monolith = build_count_monolith/raion_build_count_with_material_info,
-                         build_percent_panel = build_count_panel/raion_build_count_with_material_info,
-                         build_percent_foam = build_count_foam/raion_build_count_with_material_info,
-                         build_percent_slag = build_count_slag/raion_build_count_with_material_info,
-                         build_percent_mix = build_count_mix/raion_build_count_with_material_info)
-## build_percent_brick looks the most impactful, but still not too much
+##neighboring materials... Checked... Not impactful
+
 ## elder/working percent
 full_train_set$work_to_elder <- full_train_set$work_all/full_train_set$ekder_all
 ## incorrect state value
@@ -180,6 +198,8 @@ full_train_set <- left_join(full_train_set, avg_monthly_df, by = c("year" = "yea
 
 #product type is significant, but something else is picking that up now.
 lm_both <- lm(price_doc ~ full_sq + 
+                build_year2 + 
+                product_type + 
                 as.factor(culture_objects_top_25_raion) +
                 railroad_station_walk_km + 
                 metro_km_walk + 
@@ -192,31 +212,20 @@ lm_both <- lm(price_doc ~ full_sq +
                 sadovoe_km + 
                 bulvar_ring_km + 
                 office_km + 
-                predicted,
-              full_train_set)
+                predicted +
+                material + 
+                num_room + 
+                floor2 + 
+                sub_area,
+              full_train_set[c(-2119, -2781, -7458, -22786), ])
 summary(lm_both)
 BIC(lm_both)
-#### ensembles ####
-# removed build_year so I could get it running
-xg_matrix <- model.matrix(~full_sq +
-  as.factor(culture_objects_top_25_raion) +
-  railroad_station_walk_km + 
-  metro_km_walk + 
-  as.factor(university_top_20_raion) + 
-  ecology + 
-  state * full_sq +
-  work_to_elder + 
-  radiation_raion +
-  school_km + 
-  sadovoe_km + 
-  bulvar_ring_km + 
-  office_km +
-  predicted + 
-  sub_area,
-data = d(full_train_set))
-xg_target <- d(full_train_set)$price_doc
 
-xg_test_matrix <- model.matrix(~full_sq +
+#### ensembles ####
+# 
+xg_matrix <- model.matrix(~ full_sq + 
+                            build_year2 + 
+                            product_type + 
                             as.factor(culture_objects_top_25_raion) +
                             railroad_station_walk_km + 
                             metro_km_walk + 
@@ -228,14 +237,36 @@ xg_test_matrix <- model.matrix(~full_sq +
                             school_km + 
                             sadovoe_km + 
                             bulvar_ring_km + 
-                            office_km +
-                            predicted + 
+                            office_km + 
+                            predicted +
+                            material + 
+                            num_room + 
+                            floor2 +
                             sub_area,
+                          d(full_train_set)[c(-2119, -2781, -7458, -22786), ])
+xg_target <- d(full_train_set)$price_doc[c(-2119, -2781, -7458, -22786)]
+
+xg_test_matrix <- model.matrix(~ full_sq + 
+                                 build_year2 + 
+                                 product_type + 
+                                 as.factor(culture_objects_top_25_raion) +
+                                 railroad_station_walk_km + 
+                                 metro_km_walk + 
+                                 as.factor(university_top_20_raion) + 
+                                 ecology + 
+                                 state * full_sq +
+                                 work_to_elder + 
+                                 radiation_raion +
+                                 school_km + 
+                                 sadovoe_km + 
+                                 bulvar_ring_km + 
+                                 office_km + 
+                                 predicted +
+                                 material + 
+                                 num_room + 
+                                 floor2 +
+                                 sub_area,
                           data = full_train_set[30472:38133,])
-
-
-
-
 
 
 #Swap to RMSLE
@@ -248,14 +279,14 @@ custom_summary = function(data, lev = NULL, model = NULL){
 ctrl <- trainControl(method = "cv",
                      number = 5,
                      summaryFunction = custom_summary,
-                     verboseIter = FALSE,
+                     verboseIter = TRUE,
                      ##running into memory issues on my computer
                      allowParallel = FALSE)
-xg_grid <- expand.grid(eta = seq(0.01, 0.21, by = 0.05),
-                       max_depth = seq(2, 10, by = 2),
-                       nrounds = seq(2000, 4000, by = 500),
+xg_grid <- expand.grid(eta = c(0.02, 0.05, 0.08),
+                       max_depth = c(2, 4, 6),
+                       nrounds = seq(2500, 4000, by = 500),
                        gamma = 0,
-                       colsample_bytree = 1,
+                       colsample_bytree = c(0.5, 0.7),
                        min_child_weight = 1,
                        subsample = 1)
 
@@ -271,5 +302,12 @@ xg_pred <- predict(xg_model, xg_test_matrix)
 to_export <- data.frame(id = full_test_set$id, price_doc = xg_pred) 
 write_csv(to_export, "submission1_xgboost.csv")
 
+#### Fix test data ####
 
+# there's a relation between build year and price_doc
+relate_lm <- lm(num_room ~ build_year2 + full_sq + material, data = full_train_set)
+summary(relate_lm)
 
+relate_lm <- lm(price_per_foot ~ floor, data = filter(mutate(full_train_set, floor = ifelse(is.na(floor), 1, floor)), price_per_foot < 500000, build_year > 1800))
+summary(relate_lm)
+ggplot(filter(full_train_set, price_per_foot < 500000), aes(x = floor, y = price_per_foot)) + geom_point(alpha = 0.5) + stat_smooth(method = "lm")
